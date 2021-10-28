@@ -3,12 +3,256 @@
  */
 package youtube.data.api;
 
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.http.HttpRequest;
+import com.google.api.client.http.HttpRequestInitializer;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import com.google.api.services.youtube.YouTube;
+import com.google.api.services.youtube.model.ResourceId;
+import com.google.api.services.youtube.model.SearchListResponse;
+import com.google.api.services.youtube.model.SearchResult;
+import com.google.api.services.youtube.model.Video;
+import com.google.api.services.youtube.model.VideoListResponse;
+import com.google.api.services.youtube.model.VideoSnippet;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.security.GeneralSecurityException;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
+
+/**
+ * Print a list of videos matching a search term.
+ */
 public class App {
-    public String getGreeting() {
-        return "Hello World!";
+
+    private static final String APPLICATION_NAME = "API search";
+    // Define a global variable that identifies the name of a file that
+    // contains the API key.
+    private static final String PROPERTIES_FILENAME = "youtube.properties";
+
+    private static final long NUMBER_OF_VIDEOS_RETURNED = 25;
+
+    // Define a global instance of a Youtube object, which will be used
+    // to make YouTube Data API requests.
+    private static YouTube youtube;
+
+    private static Properties properties;
+
+    /**
+     * Initialize a YouTube object to search for videos on YouTube. Then
+     * display the name and thumbnail image of each video in the result set.
+     *
+     * @param args command line args.
+     */
+    public static void main(String[] args) {
+        try {
+            // Get properties from the properties file.
+            properties = getProperties();
+
+            // Define an instance of a Youtube object, which will be used
+            // to make YouTube Data API requests.
+            youtube = getService();
+
+            // Prompt the user to enter a query term.
+            String queryTerm = getInputQuery();
+
+            // Get Youtube Search list using search term.
+            List<SearchResult> searchResultList = youtubeSearchList(queryTerm);
+
+            // Get video id list from Youtube Search list.
+            List<String> videoIds = getVideoIds(searchResultList);
+
+            if (!videoIds.isEmpty()) {
+                // Get Youtube Video list using video id list.
+                List<Video> videos = youtubeVideoList(videoIds);
+
+                if (videos != null && !videos.isEmpty()) {
+                    // Print videos' information.
+                    prettyPrint(videos.iterator(), queryTerm);
+                }
+            }
+        } catch (GoogleJsonResponseException e) {
+            System.err.println("There was a service error: " + e.getDetails().getCode() + " : "
+                + e.getDetails().getMessage());
+        } catch (IOException e) {
+            System.err.println("There was an IO error: " + e.getCause() + " : " + e.getMessage());
+        } catch (Throwable t) {
+            t.printStackTrace();
+        }
     }
 
-    public static void main(String[] args) {
-        System.out.println(new App().getGreeting());
+    /**
+     * Load and return properties from the properties file.
+     *
+     * @return properties
+     * @throws IOException
+     */
+    public static Properties getProperties() throws IOException {
+        Properties properties = new Properties();
+        InputStream in = App.class.getResourceAsStream("/" + PROPERTIES_FILENAME);
+        properties.load(in);
+
+        return properties;
+    }
+
+    /**
+     * Build and return an API client service.
+     *
+     * @return an API client service
+     * @throws GeneralSecurityException, IOException
+     */
+    public static YouTube getService() throws GeneralSecurityException, IOException {
+        final NetHttpTransport httpTransport = GoogleNetHttpTransport.newTrustedTransport();
+        final GsonFactory jsonFactory = GsonFactory.getDefaultInstance();
+
+        // This object is used to make YouTube Data API requests. The last
+        // argument is required, but since we don't need anything
+        // initialized when the HttpRequest is initialized, we override
+        // the interface and provide a no-op function.
+        return new YouTube.Builder(httpTransport, jsonFactory, new HttpRequestInitializer() {
+            public void initialize(HttpRequest request) throws IOException {
+            }
+        }).setApplicationName(APPLICATION_NAME).build();
+    }
+
+    /**
+     * Prompt the user to enter a query term and return the user-specified term.
+     *
+     * @return input search term
+     * @throws IOException
+     */
+    private static String getInputQuery() throws IOException {
+        String inputQuery = "";
+        BufferedReader bReader = new BufferedReader(new InputStreamReader(System.in));
+
+        while (inputQuery == null || inputQuery.trim().isEmpty()) {
+            System.out.print("Please enter a search term: ");
+            inputQuery = bReader.readLine();
+        }
+
+        return inputQuery;
+    }
+
+    /**
+     * Get video id list from search result list.
+     *
+     * @param searchResultList Youtube Search list
+     * 
+     * @return video id list
+     */
+    private static List<String> getVideoIds(List<SearchResult> searchResultList) {
+        List<String> videoIds = new ArrayList<>();
+
+        for (SearchResult video : searchResultList) {
+            ResourceId rId = video.getId();
+
+            // Confirm that the result represents a video. Otherwise, the
+            // item will not contain a video ID.
+            if (rId.getKind().equals("youtube#video")) {
+                videoIds.add(rId.getVideoId());
+            }
+        }
+
+        return videoIds;
+    }
+
+    /**
+     * Youtube Search list using search query and return list of search result.
+     *
+     * @param queryTerm Search query (String)
+     * 
+     * @return Search result list
+     * @throws IOException
+     */
+    private static List<SearchResult> youtubeSearchList(String queryTerm) throws IOException {
+        // Define the API request for retrieving search results.
+        YouTube.Search.List search = youtube.search().list(Arrays.asList("id", "snippet"));
+
+        // Set API key from the Google Cloud Console for non-authenticated requests.
+        String apiKey = properties.getProperty("youtube.apikey");
+        search.setKey(apiKey);
+        search.setQ(queryTerm);
+
+        // Restrict the search results to only include videos.
+        search.setType(Arrays.asList("video"));
+
+        // To increase efficiency, only retrieve the fields that the application uses.
+        search.setFields("items(id.kind,id.videoId)");
+        search.setMaxResults(NUMBER_OF_VIDEOS_RETURNED);
+
+        // Call the API and print results.
+        SearchListResponse searchResponse = search.execute();
+
+        return searchResponse.getItems();
+    }
+
+    /**
+     * Youtube Video list using list of video ids and return list of video result.
+     *
+     * @param videoIds Video id list
+     * 
+     * @return Video list
+     * @throws IOException
+     */
+    private static List<Video> youtubeVideoList(List<String> videoIds) throws IOException {
+        // Define the API request for retrieving video results.
+        YouTube.Videos.List videoList = youtube.videos().list(Arrays.asList(
+            "snippet", "contentDetails", "statistics"
+        ));
+
+        // Set API key from the Google Cloud Console for non-authenticated requests.
+        String apiKey = properties.getProperty("youtube.apikey");
+        videoList.setKey(apiKey);
+        videoList.setId(videoIds);
+
+        // To increase efficiency, only retrieve the fields that the application uses.
+        videoList.setFields("items(id,snippet.title,snippet.channelTitle," +
+            "snippet.thumbnails.default.url,contentDetails.duration,statistics.viewCount)");
+        videoList.setMaxResults(NUMBER_OF_VIDEOS_RETURNED);
+
+        VideoListResponse videoListResponse = videoList.execute();
+
+        return videoListResponse.getItems();
+    }
+
+    /**
+     * Prints out all results in the Iterator. For each result, print the
+     * title, video ID, and thumbnail.
+     *
+     * @param iteratorSearchResults Iterator of SearchResults to print
+     *
+     * @param query Search query (String)
+     */
+    private static void prettyPrint(Iterator<Video> iterator, String query) {
+        System.out.println("\n=============================================================");
+        System.out.println("   First " + NUMBER_OF_VIDEOS_RETURNED + " videos for search on \"" + query + "\".");
+        System.out.println("=============================================================\n");
+
+        int idx = 1;
+        while (iterator.hasNext()) {
+            Video video = iterator.next();
+            VideoSnippet videoSnippet = video.getSnippet();
+            Duration duration = Duration.parse(video.getContentDetails().getDuration());
+            long s = duration.getSeconds();
+            String durationString = String.format("%02d:%02d:%02d", s / 3600, (s % 3600) / 60, (s % 60));
+
+            System.out.println(idx++ + ".");
+            System.out.println(" Video Id: " + video.getId());
+            System.out.println(" Title: " + videoSnippet.getTitle());
+            System.out.println(" Channel Title: " + videoSnippet.getChannelTitle());
+            System.out.println(" Thumbnail: " + videoSnippet.getThumbnails().getDefault().getUrl());
+            System.out.println(" Duration: " + durationString);
+            System.out.println(" View Count: " + video.getStatistics().getViewCount());
+            System.out.println("\n-------------------------------------------------------------\n");
+        }
     }
 }

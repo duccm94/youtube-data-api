@@ -7,6 +7,7 @@
  */
 
 plugins {
+    id 'java'
     // Apply the application plugin to add support for building a CLI application in Java.
     id 'application'
 }
@@ -22,11 +23,33 @@ dependencies {
 
     // This dependency is used by the application.
     implementation 'com.google.guava:guava:30.1.1-jre'
+
+    implementation 'com.google.api-client:google-api-client:1.32.2'
+    // implementation 'com.google.oauth-client:google-oauth-client-jetty:1.32.1'
+    implementation 'com.google.apis:google-api-services-youtube:v3-rev20210915-1.32.1'
+    implementation 'com.google.api-client:google-api-client-gson:1.32.2'
 }
 
 application {
     // Define the main class for the application.
-    mainClass = 'youtube.data.api.App'
+    mainClass = "youtube.data.api.App"
+}
+
+run {
+    standardInput = System.in
+}
+
+task fatJar(type: Jar) {
+    manifest {
+        attributes 'Main-Class': application.mainClass
+    }
+    archiveBaseName = "${rootProject.name}"
+    from {
+        configurations.compileClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    } {
+        exclude "META-INF/*"
+    }
+    with jar
 }
 
 tasks.named('test') {
